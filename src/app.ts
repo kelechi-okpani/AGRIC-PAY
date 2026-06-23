@@ -62,6 +62,7 @@ const apolloServer = new ApolloServer<GraphQLContext>({
   introspection: env.NODE_ENV !== 'production',
 });
 
+
 // const apolloServer = new ApolloServer<GraphQLContext>({
 //   schema,
 //   formatError: formatGraphQLError,
