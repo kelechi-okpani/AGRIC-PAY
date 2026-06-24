@@ -94,61 +94,76 @@ export class KYCService {
   }
 
   // ── ADMIN ACTIONS ─────────────────────────────────────────
-  async approveKYC(kycId: string, adminId: string): Promise<void> {
-    const kyc = await KYC.findById(kycId);
-    if (!kyc) throw new NotFoundError('KYC');
 
-    kyc.status = KYCStatus.APPROVED;
-    kyc.reviewedBy = adminId as any;
-    kyc.reviewedAt = new Date();
-    await kyc.save();
+  // ── ADMIN ACTIONS ─────────────────────────────────────────
+async approveKYC(kycId: string, adminId: string): Promise<void> {
+  const kyc = await KYC.findById(kycId);
+  if (!kyc) throw new NotFoundError('KYC');
 
-    await User.findByIdAndUpdate(kyc.userId, { kycLevel: KYCLevel.LEVEL_2 });
-    eventBus.emit(Events.KYC_APPROVED, { userId: kyc.userId });
+  kyc.status     = KYCStatus.APPROVED;
+  kyc.reviewedBy = adminId as any;
+  kyc.reviewedAt = new Date();
+  await kyc.save();
 
-    await notificationQueue.add('kyc-approved', {
-      userId: kyc.userId.toString(),
-      channel: 'WHATSAPP',
-      message: `🎉 Your KYC has been approved! You now have full access to AgroFinPay. Your daily transfer limit is ₦2,000,000.`,
-    });
-  }
+  await User.findByIdAndUpdate(kyc.userId, { kycLevel: KYCLevel.LEVEL_2 });
+  eventBus.emit(Events.KYC_APPROVED, { userId: kyc.userId });
 
-  async rejectKYC(kycId: string, adminId: string, reason: string): Promise<void> {
-    const kyc = await KYC.findById(kycId);
-    if (!kyc) throw new NotFoundError('KYC');
+  // Notification sent via event handler → notification queue → WhatsApp Cloud API
+  await notificationQueue.add('kyc-approved', {
+    userId:  kyc.userId.toString(),
+    channel: 'WHATSAPP',
+    message:
+      `🎉 *KYC Approved!*\n\n` +
+      `Your identity has been verified. You now have full access to AgroFinPay!\n` +
+      `✅ ₦2,000,000 daily transfer limit\n` +
+      `✅ Virtual dollar card\n` +
+      `✅ Crypto trading\n\n` +
+      `Reply *MENU* to get started.`,
+  });
+}
 
-    kyc.status = KYCStatus.REJECTED;
-    kyc.rejectionReason = reason;
-    kyc.reviewedBy = adminId as any;
-    kyc.reviewedAt = new Date();
-    await kyc.save();
+async rejectKYC(kycId: string, adminId: string, reason: string): Promise<void> {
+  const kyc = await KYC.findById(kycId);
+  if (!kyc) throw new NotFoundError('KYC');
 
-    eventBus.emit(Events.KYC_REJECTED, { userId: kyc.userId, reason });
+  kyc.status          = KYCStatus.REJECTED;
+  kyc.rejectionReason = reason;
+  kyc.reviewedBy      = adminId as any;
+  kyc.reviewedAt      = new Date();
+  await kyc.save();
 
-    await notificationQueue.add('kyc-rejected', {
-      userId: kyc.userId.toString(),
-      channel: 'WHATSAPP',
-      message: `❌ Your KYC was rejected.\nReason: ${reason}\n\nReply *KYC* to resubmit.`,
-    });
-  }
+  eventBus.emit(Events.KYC_REJECTED, { userId: kyc.userId, reason });
 
-  async requestResubmission(kycId: string, adminId: string, note: string): Promise<void> {
-    const kyc = await KYC.findById(kycId);
-    if (!kyc) throw new NotFoundError('KYC');
+  await notificationQueue.add('kyc-rejected', {
+    userId:  kyc.userId.toString(),
+    channel: 'WHATSAPP',
+    message:
+      `❌ *KYC Rejected*\n\n` +
+      `Your KYC submission was rejected.\n` +
+      `*Reason:* ${reason}\n\n` +
+      `Reply *KYC* to resubmit your documents.`,
+  });
+}
 
-    kyc.status = KYCStatus.RESUBMISSION_REQUIRED;
-    kyc.resubmissionNote = note;
-    kyc.reviewedBy = adminId as any;
-    await kyc.save();
+async requestResubmission(kycId: string, adminId: string, note: string): Promise<void> {
+  const kyc = await KYC.findById(kycId);
+  if (!kyc) throw new NotFoundError('KYC');
 
-    await notificationQueue.add('kyc-resubmit', {
-      userId: kyc.userId.toString(),
-      channel: 'WHATSAPP',
-      message: `⚠️ Additional information required for your KYC:\n${note}\n\nReply *KYC* to resubmit.`,
-    });
-  }
+  kyc.status            = KYCStatus.RESUBMISSION_REQUIRED;
+  kyc.resubmissionNote  = note;
+  kyc.reviewedBy        = adminId as any;
+  await kyc.save();
 
-  async getPendingKYCs(filters: { limit?: number; offset?: number }) {
+  await notificationQueue.add('kyc-resubmit', {
+    userId:  kyc.userId.toString(),
+    channel: 'WHATSAPP',
+    message:
+      `⚠️ *Additional Info Required*\n\n` +
+      `${note}\n\n` +
+      `Reply *KYC* to resubmit your documents.`,
+  });
+}
+   async getPendingKYCs(filters: { limit?: number; offset?: number }) {
     const [kycs, total] = await Promise.all([
       KYC.find({ status: KYCStatus.PENDING })
         .populate('userId', 'fullName phone email')
@@ -159,6 +174,63 @@ export class KYCService {
     ]);
     return { kycs, total };
   }
+
+
+  // async approveKYC(kycId: string, adminId: string): Promise<void> {
+  //   const kyc = await KYC.findById(kycId);
+  //   if (!kyc) throw new NotFoundError('KYC');
+
+  //   kyc.status = KYCStatus.APPROVED;
+  //   kyc.reviewedBy = adminId as any;
+  //   kyc.reviewedAt = new Date();
+  //   await kyc.save();
+
+  //   await User.findByIdAndUpdate(kyc.userId, { kycLevel: KYCLevel.LEVEL_2 });
+  //   eventBus.emit(Events.KYC_APPROVED, { userId: kyc.userId });
+
+  //   await notificationQueue.add('kyc-approved', {
+  //     userId: kyc.userId.toString(),
+  //     channel: 'WHATSAPP',
+  //     message: `🎉 Your KYC has been approved! You now have full access to AgroFinPay. Your daily transfer limit is ₦2,000,000.`,
+  //   });
+  // }
+
+  // async rejectKYC(kycId: string, adminId: string, reason: string): Promise<void> {
+  //   const kyc = await KYC.findById(kycId);
+  //   if (!kyc) throw new NotFoundError('KYC');
+
+  //   kyc.status = KYCStatus.REJECTED;
+  //   kyc.rejectionReason = reason;
+  //   kyc.reviewedBy = adminId as any;
+  //   kyc.reviewedAt = new Date();
+  //   await kyc.save();
+
+  //   eventBus.emit(Events.KYC_REJECTED, { userId: kyc.userId, reason });
+
+  //   await notificationQueue.add('kyc-rejected', {
+  //     userId: kyc.userId.toString(),
+  //     channel: 'WHATSAPP',
+  //     message: `❌ Your KYC was rejected.\nReason: ${reason}\n\nReply *KYC* to resubmit.`,
+  //   });
+  // }
+
+  // async requestResubmission(kycId: string, adminId: string, note: string): Promise<void> {
+  //   const kyc = await KYC.findById(kycId);
+  //   if (!kyc) throw new NotFoundError('KYC');
+
+  //   kyc.status = KYCStatus.RESUBMISSION_REQUIRED;
+  //   kyc.resubmissionNote = note;
+  //   kyc.reviewedBy = adminId as any;
+  //   await kyc.save();
+
+  //   await notificationQueue.add('kyc-resubmit', {
+  //     userId: kyc.userId.toString(),
+  //     channel: 'WHATSAPP',
+  //     message: `⚠️ Additional information required for your KYC:\n${note}\n\nReply *KYC* to resubmit.`,
+  //   });
+  // }
+
+ 
 }
 
 export const kycService = new KYCService();

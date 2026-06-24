@@ -10,6 +10,39 @@ const paystackAxios = axios.create({
 
 class PaystackService {
 
+  async createDedicatedVirtualAccount(data: {
+  customer:       string;
+  preferred_bank: string;
+  firstName:      string;
+  lastName:       string;
+  email:          string;
+  phone:          string;
+}): Promise<{ account_number: string; account_name: string; bank: { name: string; id: number } }> {
+  try {
+    // Step 1 — create or fetch Paystack customer
+    const customerRes = await paystackAxios.post('/customer', {
+      email:      data.email,
+      first_name: data.firstName,
+      last_name:  data.lastName,
+      phone:      data.phone,
+      metadata:   { userId: data.customer },
+    });
+
+    const customerCode = customerRes.data.data.customer_code;
+
+    // Step 2 — create dedicated virtual account
+    const dvaRes = await paystackAxios.post('/dedicated_account', {
+      customer:       customerCode,
+      preferred_bank: data.preferred_bank, // 'wema-bank' or 'titan-paystack'
+    });
+
+    return dvaRes.data.data;
+  } catch (err: any) {
+    logger.error('[Paystack] Create DVA failed:', err.response?.data);
+    throw new AppError('Virtual account creation failed', 500);
+  }
+}
+
   async initializeTransaction(data: {
     email: string;
     amount: number;

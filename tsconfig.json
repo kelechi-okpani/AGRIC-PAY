@@ -3,29 +3,67 @@
     "target": "ES2020",
     "module": "commonjs",
     "lib": ["ES2020"],
+
+    "rootDir": "./src",
     "outDir": "./dist",
-    "rootDir": "server/src",
+
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+
     "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
+
     "baseUrl": ".",
+
     "paths": {
-      "@config/*": ["server/src/config/*"],
-      "@modules/*": ["server/src/modules/*"],
-      "@middleware/*": ["server/src/middleware/*"],
-      "@shared/*": ["server/src/shared/*"],
-      "@infrastructure/*": ["server/src/infrastructure/*"],
-      "@jobs/*": ["server/src/jobs/*"],
-      "@queues/*": ["server/src/queues/*"],
-      "@events/*": ["server/src/events/*"],
-      "@core/*": ["server/src/core/*"]
+      "@config/*": ["src/config/*"],
+      "@modules/*": ["src/modules/*"],
+      "@middleware/*": ["src/middleware/*"],
+      "@shared/*": ["src/shared/*"],
+      "@infrastructure/*": ["src/infrastructure/*"],
+      "@jobs/*": ["src/jobs/*"],
+      "@queues/*": ["src/queues/*"],
+      "@events/*": ["src/events/*"],
+      "@core/*": ["src/core/*"]
     }
   },
-  "include": ["server/src/**/*"],
+
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
+
+
+// {
+//   "compilerOptions": {
+//     "target": "ES2020",
+//     "module": "commonjs",
+//     "lib": ["ES2020"],
+//     "outDir": "./dist",
+//     "rootDir": "server/src",
+//     "strict": true,
+//     "esModuleInterop": true,
+//     "skipLibCheck": true,
+//     "forceConsistentCasingInFileNames": true,
+//     "resolveJsonModule": true,
+//     "declaration": true,
+//     "declarationMap": true,
+//     "sourceMap": true,
+//     "baseUrl": ".",
+//     "paths": {
+//       "@config/*": ["server/src/config/*"],
+//       "@modules/*": ["server/src/modules/*"],
+//       "@middleware/*": ["server/src/middleware/*"],
+//       "@shared/*": ["server/src/shared/*"],
+//       "@infrastructure/*": ["server/src/infrastructure/*"],
+//       "@jobs/*": ["server/src/jobs/*"],
+//       "@queues/*": ["server/src/queues/*"],
+//       "@events/*": ["server/src/events/*"],
+//       "@core/*": ["server/src/core/*"]
+//     }
+//   },
+//   "include": ["server/src/**/*"],
+//   "exclude": ["node_modules", "dist"]
+// }
