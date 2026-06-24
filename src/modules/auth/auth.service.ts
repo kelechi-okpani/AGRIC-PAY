@@ -3,7 +3,6 @@ import { hashPassword, comparePassword } from '../../shared/utils/hash';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../shared/utils/jwt';
 import { generateOTP, saveOTP, verifyOTP } from '../../shared/utils/otp';
 import { AppError, ConflictError, UnauthorizedError, NotFoundError, ValidationError } from '../../core/errors/AppError';
-import { twilioService } from '../../infrastructure/twilio';
 import { eventBus, Events } from '../../events/EventBus';
 import { UserRole } from '../../core/types/enums';
 import speakeasy from 'speakeasy';

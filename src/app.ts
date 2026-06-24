@@ -31,6 +31,7 @@ import transferRoutes from './modules/transfers/transfer.routes';
 
 // Event handlers (register side effects)
 import './events/handlers/kyc.handler';
+import depositWithdrawalRoutes from '@modules/wallets/funding/deposit-withdrawal.routes';
 
 const app = express();
 const httpServer = http.createServer(app);
@@ -45,6 +46,9 @@ app.use('/api/auth', authRateLimiter, authRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api', transferRoutes);
+app.use('/api', depositWithdrawalRoutes);
+
+
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', app: env.APP_NAME, version: '1.0.0' }));
 

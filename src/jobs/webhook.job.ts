@@ -18,3 +18,23 @@ export const startWebhookWorker = () => {
   worker.on('failed', (job, err) => logger.error(`[Webhook Job] Failed job ${job?.id}:`, err));
   return worker;
 };
+
+
+
+// export const startWebhookWorker = () => {
+//   const worker = new Worker(
+//     'webhook',
+//     async (job) => {
+//       const { url, payload, headers } = job.data;
+//       await axios.post(url, payload, { headers, timeout: 10000 });
+//       logger.info(`[Webhook Job] Delivered to ${url}`);
+//     },
+//     {
+//       connection: { host: process.env.REDIS_HOST || 'localhost', port: 6379 },
+//       defaultJobOptions: { attempts: 5, backoff: { type: 'exponential', delay: 5000 } },
+//     }
+//   );
+
+//   worker.on('failed', (job, err) => logger.error(`[Webhook Job] Failed job ${job?.id}:`, err));
+//   return worker;
+// };
