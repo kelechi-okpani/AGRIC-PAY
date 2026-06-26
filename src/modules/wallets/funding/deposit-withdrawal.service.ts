@@ -1,34 +1,18 @@
-import redis from '@config/redis';
-import { AppError, NotFoundError, ValidationError } from '@core/errors/AppError';
-import { paystackService } from '@infrastructure/paystack';
-import { User } from '@modules/auth/auth.model';
-import { logger } from '@shared/utils/logger';
 import { v4 as uuidv4 }            from 'uuid';
-import { Deposit } from './deposit.model';
-import { walletService } from '../wallet.service';
-import { WalletType } from '@core/types/enums';
-import { whatsAppService } from '@infrastructure/whatsapp';
-import { IWithdrawal, Withdrawal } from './withdrawal.model';
-import { Wallet } from '../wallet.model';
 
+import redis from "@config/redis";
+import { AppError, NotFoundError, ValidationError } from "@core/errors/AppError";
+import { paystackService } from "@infrastructure/paystack";
+import { User } from "@modules/auth/auth.model";
+import { logger } from "@shared/utils/logger";
+import { Deposit, IDeposit } from "./deposit.model";
+import { walletService } from "../wallet.service";
+import { WalletType } from "@core/types/enums";
+import { whatsAppService } from "@infrastructure/whatsapp";
+import { IWithdrawal, Withdrawal } from "./withdrawal.model";
+import { Wallet } from "../wallet.model";
 
-// import { Deposit, IDeposit }       from './deposit.model';
-// import { Withdrawal, IWithdrawal } from './withdrawal.model';
-// import { Wallet }                  from './wallet.model';
-// import { walletService }           from './wallet.service';
-// import { paystackService }         from '../../infrastructure/paystack';
-// import { whatsAppService }         from '../../infrastructure/whatsapp';
-// import { User }                    from '../auth/auth.model';
-// import { WalletType }              from '../../core/types/enums';
-// import {
-//   AppError,
-//   NotFoundError,
-//   ValidationError,
-// } from '../../core/errors/AppError';
-// import { logger } from '../../shared/utils/logger';
-// import redis      from '../../config/redis';
-
-// ── FEE STRUCTURE ─────────────────────────────────────────────────────────────
+// ── WITHDRAWAL FEE STRUCTURE ──────────────────────────────────────────────────
 const getWithdrawalFee = (amount: number): number => {
   if (amount <= 5_000)   return 10;
   if (amount <= 50_000)  return 25;
@@ -39,21 +23,19 @@ const getWithdrawalFee = (amount: number): number => {
 export class DepositWithdrawalService {
 
   // ════════════════════════════════════════════════════════════════════
-  //  DEPOSITS — 100% WhatsApp, no external links
-  //  Method: Paystack Dedicated Virtual Account (DVA)
-  //  User pays via bank transfer from their own banking app
+  //  DEPOSITS
+  //  Uses Paystack Dedicated Virtual Account (DVA)
+  //  User pays via bank transfer from their own bank app — no links
   //  Webhook fires → wallet credited → WhatsApp notification sent
   // ════════════════════════════════════════════════════════════════════
 
-  // ── CREATE DEDICATED VIRTUAL ACCOUNT FOR USER ─────────────────────
-  // Called once during user registration or first deposit attempt.
-  // Each user gets a permanent virtual account number they can always
-  // pay into from any bank app or USSD.
+  // ── CREATE OR GET DEDICATED VIRTUAL ACCOUNT ───────────────────────
   async createOrGetVirtualAccount(userId: string): Promise<{
     bankName:      string;
     accountNumber: string;
     accountName:   string;
   }> {
+    // Return from Redis cache if already created
     const cacheKey = `dva:${userId}`;
     const cached   = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
@@ -62,8 +44,7 @@ export class DepositWithdrawalService {
     if (!user) throw new NotFoundError('User');
 
     try {
-      // Create a dedicated virtual account on Paystack
-      const result = await paystackService.createDedicatedVirtualAccount({
+      const dva = await paystackService.createDedicatedVirtualAccount({
         customer:       userId,
         preferred_bank: 'wema-bank',
         firstName:      user.fullName.split(' ')[0],
@@ -72,48 +53,56 @@ export class DepositWithdrawalService {
         phone:          user.phone,
       });
 
-      const dva = {
-        bankName:      result.bank.name,
-        accountNumber: result.account_number,
-        accountName:   result.account_name,
+      const result = {
+        bankName:      dva.bank.name,
+        accountNumber: dva.account_number,
+        accountName:   dva.account_name,
       };
 
-      // Cache permanently (DVAs don't change)
-      await redis.set(cacheKey, JSON.stringify(dva));
-      return dva;
+      // Cache permanently — DVAs don't change
+      await redis.set(cacheKey, JSON.stringify(result));
+
+      logger.info(`[DVA] Created for user=${userId}: ${result.accountNumber}`);
+      return result;
 
     } catch (err: any) {
-      logger.error('[DVA] Create virtual account failed:', err.message);
+      logger.error('[DVA] Create failed:', err.message);
       throw new AppError('Could not create virtual account. Please try again.', 500);
     }
   }
 
-  // ── SHOW DEPOSIT DETAILS TO USER (WhatsApp message) ───────────────
-  // This is what the bot sends when user says DEPOSIT.
-  // The user simply transfers money from their bank — no link needed.
-  async getDepositInstructions(userId: string, requestedAmount?: number): Promise<string> {
+  // ── GET DEPOSIT INSTRUCTIONS (WhatsApp message text) ──────────────
+  // Everything happens inside WhatsApp — user just transfers to the DVA
+  async getDepositInstructions(
+    userId:           string,
+    requestedAmount?: number
+  ): Promise<string> {
     const dva = await this.createOrGetVirtualAccount(userId);
 
     const amountLine = requestedAmount
-      ? `\nPlease transfer exactly *₦${requestedAmount.toLocaleString()}*`
-      : `\nYou can transfer *any amount* (minimum ₦100)`;
+      ? `Please transfer exactly *₦${requestedAmount.toLocaleString()}*`
+      : `You can transfer *any amount* (minimum ₦100)`;
 
     return (
       `💰 *Fund Your Wallet*\n\n` +
-      `Transfer money to this account from any bank app or USSD:\n\n` +
+      `Transfer to this account from any bank app or USSD:\n\n` +
       `🏦 Bank: *${dva.bankName}*\n` +
-      `📋 Account Number: *${dva.accountNumber}*\n` +
-      `👤 Account Name: *${dva.accountName}*\n` +
+      `📋 Account: *${dva.accountNumber}*\n` +
+      `👤 Name: *${dva.accountName}*\n\n` +
       `${amountLine}\n\n` +
-      `⚡ Your AgroFinPay wallet will be credited *automatically* within 1 minute after payment.\n\n` +
-      `You'll receive a confirmation here on WhatsApp. ✅\n\n` +
-      `_This account is unique to you. You can save it for future deposits._`
+      `⚡ Your wallet will be credited *automatically* within 1 minute.\n` +
+      `You'll receive a WhatsApp confirmation once it arrives. ✅\n\n` +
+      `_This account is permanent — save it for future deposits._`
     );
   }
 
   // ── CONFIRM DEPOSIT — called by Paystack DVA webhook ──────────────
-  async confirmDeposit(reference: string, amount: number, userId: string): Promise<void> {
-    // Idempotency — prevent double crediting
+  async confirmDeposit(
+    reference: string,
+    amount:    number,
+    userId:    string
+  ): Promise<void> {
+    // Idempotency lock — prevents double crediting on duplicate webhooks
     const lockKey = `deposit:lock:${reference}`;
     const locked  = await redis.set(lockKey, '1', 'EX', 300, 'NX');
     if (!locked) {
@@ -128,8 +117,8 @@ export class DepositWithdrawalService {
       return;
     }
 
-    // Create or update deposit record
-    const deposit = existing || await Deposit.create({
+    // Create deposit record
+    const deposit = existing || new Deposit({
       userId,
       amount,
       reference,
@@ -141,7 +130,7 @@ export class DepositWithdrawalService {
     deposit.paidAt = new Date();
     await deposit.save();
 
-    // Credit user wallet
+    // Credit user's NGN wallet
     await walletService.credit(
       userId,
       WalletType.NGN,
@@ -165,7 +154,25 @@ export class DepositWithdrawalService {
     logger.info(`[Deposit] Confirmed: ref=${reference} amount=${amount} user=${userId}`);
   }
 
-  // ── GET USER DEPOSIT HISTORY ──────────────────────────────────────
+  // ── FAIL DEPOSIT ──────────────────────────────────────────────────
+  async failDeposit(reference: string): Promise<void> {
+    const deposit = await Deposit.findOne({ reference, status: 'PENDING' });
+    if (!deposit) return;
+
+    deposit.status = 'FAILED';
+    await deposit.save();
+
+    logger.warn(`[Deposit] Failed: ref=${reference}`);
+  }
+
+  // ── GET DEPOSIT BY REFERENCE ──────────────────────────────────────
+  async getDepositByReference(reference: string, userId: string): Promise<IDeposit> {
+    const deposit = await Deposit.findOne({ reference, userId });
+    if (!deposit) throw new NotFoundError('Deposit');
+    return deposit;
+  }
+
+  // ── GET USER DEPOSITS ─────────────────────────────────────────────
   async getUserDeposits(
     userId:  string,
     filters: { status?: string; limit?: number; offset?: number }
@@ -185,15 +192,32 @@ export class DepositWithdrawalService {
   }
 
   // ════════════════════════════════════════════════════════════════════
-  //  WITHDRAWALS — 100% WhatsApp
-  //  User provides bank details in chat
-  //  Bot debits wallet and sends to bank via Paystack Transfer API
-  //  Status updates sent via WhatsApp
+  //  WITHDRAWALS
+  //  100% WhatsApp — user provides bank details in chat
+  //  Bot debits wallet → Paystack Transfer API → bank account
+  //  All status updates sent back via WhatsApp
   // ════════════════════════════════════════════════════════════════════
 
-  // ── RESOLVE BANK ACCOUNT — called mid-conversation ─────────────────
-  // User provides account number + bank name in WhatsApp chat.
-  // We verify with Paystack and return the actual account name.
+  // ── FIND BANK CODE FROM NAME ──────────────────────────────────────
+  async findBankCode(bankName: string): Promise<{ name: string; code: string } | null> {
+    const banks = await this.getBanks();
+    const lower = bankName.toLowerCase().trim();
+
+    // Try exact match first
+    let match = banks.find((b: any) => b.name.toLowerCase() === lower);
+
+    // Try partial match
+    if (!match) {
+      match = banks.find((b: any) =>
+        b.name.toLowerCase().includes(lower) ||
+        lower.includes(b.name.toLowerCase().split(' ')[0])
+      );
+    }
+
+    return match || null;
+  }
+
+  // ── RESOLVE BANK ACCOUNT ──────────────────────────────────────────
   async resolveBankAccount(
     accountNumber: string,
     bankCode:      string
@@ -207,12 +231,12 @@ export class DepositWithdrawalService {
       };
     } catch {
       throw new ValidationError(
-        'Account number not found. Please check the number and bank name and try again.'
+        'Account not found. Please check the account number and bank name.'
       );
     }
   }
 
-  // ── GET BANKS (cached) ────────────────────────────────────────────
+  // ── GET BANKS (cached 24 hours) ───────────────────────────────────
   async getBanks(): Promise<{ name: string; code: string }[]> {
     const cacheKey = 'banks:nigeria';
     const cached   = await redis.get(cacheKey);
@@ -221,22 +245,6 @@ export class DepositWithdrawalService {
     const banks = await paystackService.getBanks();
     await redis.set(cacheKey, JSON.stringify(banks), 'EX', 86400);
     return banks;
-  }
-
-  // ── FIND BANK CODE FROM NAME ──────────────────────────────────────
-  async findBankCode(bankName: string): Promise<{ name: string; code: string } | null> {
-    const banks = await this.getBanks();
-    const lower = bankName.toLowerCase().trim();
-
-    // Exact match first
-    let bank = banks.find((b: any) => b.name.toLowerCase() === lower);
-
-    // Partial match fallback
-    if (!bank) {
-      bank = banks.find((b: any) => b.name.toLowerCase().includes(lower) || lower.includes(b.name.toLowerCase().split(' ')[0]));
-    }
-
-    return bank || null;
   }
 
   // ── INITIATE WITHDRAWAL ───────────────────────────────────────────
@@ -257,17 +265,22 @@ export class DepositWithdrawalService {
     const total     = data.amount + fee;
     const reference = `WDR-${uuidv4()}`;
 
-    // Check balance and wallet status
+    // Validate wallet
     const wallet = await Wallet.findOne({ userId, type: WalletType.NGN });
-    if (!wallet)            throw new NotFoundError('NGN Wallet');
-    if (wallet.isFrozen)    throw new AppError('Your wallet is frozen. Contact support by replying HELP.', 400, 'WALLET_FROZEN');
-    if (wallet.balance < total) {
-      throw new AppError(
-        `Insufficient balance.\n\nRequired: ₦${total.toLocaleString()} (₦${data.amount.toLocaleString()} + ₦${fee} fee)\nYour balance: ₦${wallet.balance.toLocaleString()}\n\nReply *DEPOSIT* to fund your wallet.`,
-        400,
-        'INSUFFICIENT_BALANCE'
-      );
-    }
+    if (!wallet)         throw new NotFoundError('NGN Wallet');
+    if (wallet.isFrozen) throw new AppError(
+      'Your wallet is frozen. Reply *HELP* to contact support.',
+      400,
+      'WALLET_FROZEN'
+    );
+    if (wallet.balance < total) throw new AppError(
+      `Insufficient balance.\n\n` +
+      `Required: ₦${total.toLocaleString()} (₦${data.amount.toLocaleString()} + ₦${fee} fee)\n` +
+      `Your balance: ₦${wallet.balance.toLocaleString()}\n\n` +
+      `Reply *DEPOSIT* to fund your wallet first.`,
+      400,
+      'INSUFFICIENT_BALANCE'
+    );
 
     // Create withdrawal record
     const withdrawal = await Withdrawal.create({
@@ -284,7 +297,7 @@ export class DepositWithdrawalService {
       status:        'PENDING',
     });
 
-    // Debit wallet immediately (escrow)
+    // Debit wallet (escrow while processing)
     await walletService.debit(
       userId,
       WalletType.NGN,
@@ -293,7 +306,7 @@ export class DepositWithdrawalService {
       { reference, fee }
     );
 
-    // Initiate bank transfer via Paystack
+    // Initiate Paystack transfer
     try {
       withdrawal.status = 'PROCESSING';
       await withdrawal.save();
@@ -308,7 +321,7 @@ export class DepositWithdrawalService {
 
       const result = await paystackService.initiateTransfer({
         source:    'balance',
-        amount:    data.amount * 100,
+        amount:    data.amount * 100, // Paystack uses kobo
         recipient: recipientCode,
         reason:    data.narration || `AgroFinPay withdrawal — ${reference}`,
         reference,
@@ -317,7 +330,7 @@ export class DepositWithdrawalService {
       withdrawal.gatewayReference = result.transfer_code;
       await withdrawal.save();
 
-      // Notify user on WhatsApp
+      // Notify user
       const user = await User.findById(userId);
       if (user) {
         await whatsAppService.sendText(
@@ -327,12 +340,12 @@ export class DepositWithdrawalService {
           `To: *${data.accountName}* (${data.bankName})\n` +
           `Fee: ₦${fee}\n` +
           `Reference: ${reference}\n\n` +
-          `You'll receive confirmation here shortly (usually 1–3 minutes). 🏦`
+          `You'll be notified once complete (usually 1–3 minutes). 🏦`
         );
       }
 
     } catch (err: any) {
-      // Payout failed — reverse the wallet debit
+      // Paystack failed — reverse the wallet debit immediately
       withdrawal.status        = 'FAILED';
       withdrawal.failureReason = err.message;
       await withdrawal.save();
@@ -345,17 +358,18 @@ export class DepositWithdrawalService {
         { reference, reason: 'payout_initiation_failed' }
       );
 
-      logger.error(`[Withdrawal] Initiation failed, wallet reversed: ref=${reference}`);
+      logger.error(`[Withdrawal] Initiation failed, wallet reversed: ref=${reference}`, err.message);
       throw new AppError(
-        `Withdrawal could not be processed. Your wallet has been refunded. Reply *HELP* if you need support.`,
+        `Withdrawal could not be processed. Your wallet has been refunded automatically. Reply *HELP* if you need support.`,
         500
       );
     }
 
+    logger.info(`[Withdrawal] Initiated: ref=${reference} amount=${data.amount} user=${userId}`);
     return withdrawal;
   }
 
-  // ── CONFIRM WITHDRAWAL — Paystack webhook ─────────────────────────
+  // ── CONFIRM WITHDRAWAL — Paystack transfer.success webhook ────────
   async confirmWithdrawal(reference: string, gatewayRef?: string): Promise<void> {
     const withdrawal = await Withdrawal.findOne({ reference });
     if (!withdrawal || withdrawal.status === 'SUCCESS') return;
@@ -371,7 +385,7 @@ export class DepositWithdrawalService {
         user.phone,
         `✅ *Withdrawal Successful!*\n\n` +
         `*₦${withdrawal.amount.toLocaleString()}* has been sent to:\n` +
-        `${withdrawal.accountName} (${withdrawal.bankName})\n` +
+        `*${withdrawal.accountName}* (${withdrawal.bankName})\n` +
         `Reference: ${reference}\n\n` +
         `Reply *BALANCE* to check your wallet or *MENU* to continue.`
       );
@@ -380,17 +394,17 @@ export class DepositWithdrawalService {
     logger.info(`[Withdrawal] Confirmed: ref=${reference}`);
   }
 
-  // ── FAIL WITHDRAWAL — Paystack webhook ────────────────────────────
+  // ── FAIL WITHDRAWAL — Paystack transfer.failed/reversed webhook ───
   async failWithdrawal(reference: string, reason: string): Promise<void> {
     const withdrawal = await Withdrawal.findOne({ reference });
     if (!withdrawal || withdrawal.status === 'FAILED') return;
 
-    const refundAmount   = withdrawal.amount + withdrawal.fee;
+    const refundAmount       = withdrawal.amount + withdrawal.fee;
     withdrawal.status        = 'FAILED';
     withdrawal.failureReason = reason;
     await withdrawal.save();
 
-    // Refund wallet
+    // Refund full amount including fee
     await walletService.credit(
       withdrawal.userId.toString(),
       WalletType.NGN,
@@ -407,11 +421,18 @@ export class DepositWithdrawalService {
         `Your withdrawal of *₦${withdrawal.amount.toLocaleString()}* could not be completed.\n` +
         `Reason: ${reason}\n\n` +
         `*₦${refundAmount.toLocaleString()}* (including fee) has been returned to your wallet.\n\n` +
-        `Reply *HELP* if you need support or *WITHDRAW* to try again.`
+        `Reply *WITHDRAW* to try again or *HELP* for support.`
       );
     }
 
-    logger.warn(`[Withdrawal] Failed and refunded: ref=${reference}`);
+    logger.warn(`[Withdrawal] Failed and refunded: ref=${reference} reason=${reason}`);
+  }
+
+  // ── GET WITHDRAWAL BY REFERENCE ───────────────────────────────────
+  async getWithdrawalByReference(reference: string, userId: string): Promise<IWithdrawal> {
+    const withdrawal = await Withdrawal.findOne({ reference, userId });
+    if (!withdrawal) throw new NotFoundError('Withdrawal');
+    return withdrawal;
   }
 
   // ── GET USER WITHDRAWALS ──────────────────────────────────────────
@@ -437,7 +458,7 @@ export class DepositWithdrawalService {
   async reverseWithdrawal(reference: string, adminId: string): Promise<void> {
     const withdrawal = await Withdrawal.findOne({ reference });
     if (!withdrawal) throw new NotFoundError('Withdrawal');
-    if (!['SUCCESS','PROCESSING'].includes(withdrawal.status)) {
+    if (!['SUCCESS', 'PROCESSING'].includes(withdrawal.status)) {
       throw new ValidationError('Only successful or processing withdrawals can be reversed');
     }
 
@@ -457,16 +478,21 @@ export class DepositWithdrawalService {
       await whatsAppService.sendText(
         user.phone,
         `🔄 *Withdrawal Reversed*\n\n` +
-        `Your withdrawal of *₦${withdrawal.amount.toLocaleString()}* (Ref: ${reference}) has been reversed by our team.\n` +
+        `Your withdrawal of *₦${withdrawal.amount.toLocaleString()}* (Ref: ${reference}) has been reversed.\n` +
         `The full amount has been returned to your wallet.\n\n` +
-        `Reply *HELP* if you have questions.`
+        `Reply *HELP* if you have any questions.`
       );
     }
+
+    logger.info(`[Withdrawal] Reversed by admin=${adminId}: ref=${reference}`);
   }
 
   // ── ADMIN: GET ALL DEPOSITS ───────────────────────────────────────
   async getAllDeposits(filters: {
-    status?: string; userId?: string; limit?: number; offset?: number;
+    status?: string;
+    userId?: string;
+    limit?:  number;
+    offset?: number;
   }) {
     const query: any = {};
     if (filters.status) query.status = filters.status;
@@ -486,7 +512,10 @@ export class DepositWithdrawalService {
 
   // ── ADMIN: GET ALL WITHDRAWALS ────────────────────────────────────
   async getAllWithdrawals(filters: {
-    status?: string; userId?: string; limit?: number; offset?: number;
+    status?: string;
+    userId?: string;
+    limit?:  number;
+    offset?: number;
   }) {
     const query: any = {};
     if (filters.status) query.status = filters.status;
@@ -506,7 +535,7 @@ export class DepositWithdrawalService {
 
   // ── ADMIN: DEPOSIT STATS ──────────────────────────────────────────
   async getDepositStats() {
-    const today     = new Date(); today.setHours(0,0,0,0);
+    const today     = new Date(); today.setHours(0, 0, 0, 0);
     const thisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
     const [daily, monthly] = await Promise.all([

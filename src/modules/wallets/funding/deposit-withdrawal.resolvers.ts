@@ -1,7 +1,8 @@
-import { depositWithdrawalService } from './deposit-withdrawal.service';
-import { GraphQLContext }           from '../../core/types/context';
-import { UnauthorizedError, ForbiddenError } from '../../core/errors/AppError';
-import { AdminRole } from '../../core/types/enums';
+import { ForbiddenError, UnauthorizedError } from "@core/errors/AppError";
+import { AdminRole } from "@core/types/enums";
+import { depositWithdrawalService } from "./deposit-withdrawal.service";
+import { GraphQLContext } from "@core/types/context";
+
 
 const guard = (ctx: GraphQLContext) => {
   if (!ctx.user) throw new UnauthorizedError();
@@ -36,11 +37,6 @@ export const depositWithdrawalResolvers = {
       return depositWithdrawalService.getWithdrawalByReference(reference, user.id);
     },
 
-    verifyDeposit: (_: any, { reference }: any, ctx: GraphQLContext) => {
-      const user = guard(ctx);
-      return depositWithdrawalService.verifyDepositStatus(reference, user.id);
-    },
-
     banks: () => depositWithdrawalService.getBanks(),
 
     resolveAccount: (_: any, { accountNumber, bankCode }: any) =>
@@ -49,17 +45,15 @@ export const depositWithdrawalResolvers = {
     withdrawalFee: (_: any, { amount }: any) => {
       const fee   = amount <= 5000 ? 10 : amount <= 50000 ? 25 : amount <= 200000 ? 50 : 100;
       const total = amount + fee;
-      const note  = amount <= 5000
-        ? 'Flat ₦10 fee for transfers up to ₦5,000'
-        : amount <= 50000
-        ? 'Flat ₦25 fee for transfers ₦5,001 – ₦50,000'
-        : amount <= 200000
-        ? 'Flat ₦50 fee for transfers ₦50,001 – ₦200,000'
-        : 'Flat ₦100 fee for transfers above ₦200,000';
+      const note  =
+        amount <= 5000   ? 'Flat ₦10 fee for transfers up to ₦5,000'         :
+        amount <= 50000  ? 'Flat ₦25 fee for transfers ₦5,001 – ₦50,000'     :
+        amount <= 200000 ? 'Flat ₦50 fee for transfers ₦50,001 – ₦200,000'   :
+                           'Flat ₦100 fee for transfers above ₦200,000';
       return { amount, fee, total, feeNote: note };
     },
 
-    // Admin
+    // ── Admin ──────────────────────────────────────────────────────────
     adminDeposits: (_: any, args: any, ctx: GraphQLContext) => {
       adminGuard(ctx, AdminRole.SUPER_ADMIN, AdminRole.FINANCE_ADMIN, AdminRole.OPERATIONS_ADMIN);
       return depositWithdrawalService.getAllDeposits(args);
@@ -77,16 +71,6 @@ export const depositWithdrawalResolvers = {
   },
 
   Mutation: {
-    initiatePaystackDeposit: (_: any, { amount, email }: any, ctx: GraphQLContext) => {
-      const user = guard(ctx);
-      return depositWithdrawalService.initiatePaystackDeposit(user.id, amount, email);
-    },
-
-    initiateFlutterwaveDeposit: (_: any, { amount, email, phone, name }: any, ctx: GraphQLContext) => {
-      const user = guard(ctx);
-      return depositWithdrawalService.initiateFlutterwaveDeposit(user.id, amount, { email, phone, name });
-    },
-
     initiateWithdrawal: (_: any, args: any, ctx: GraphQLContext) => {
       const user = guard(ctx);
       return depositWithdrawalService.initiateWithdrawal(user.id, args);

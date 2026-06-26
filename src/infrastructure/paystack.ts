@@ -10,6 +10,107 @@ const paystackAxios = axios.create({
 
 class PaystackService {
 
+
+  // ── CREATE VIRTUAL CARD ───────────────────────────────────────────────
+async createVirtualCard(data: {
+  currency:            string;
+  holder_name:         string;
+  billing_address:     string;
+  billing_city:        string;
+  billing_state:       string;
+  billing_postal_code: string;
+  billing_country:     string;
+}): Promise<{
+  id:           string;
+  card_pan:     string;
+  expiry_month: string;
+  expiry_year:  string;
+  cvv:          string;
+  balance:      number;
+  status:       string;
+}> {
+  try {
+    const res = await paystackAxios.post('/virtual-cards', data);
+    return res.data.data;
+  } catch (err: any) {
+    logger.error('[Paystack] Create virtual card failed:', err.response?.data);
+    throw new AppError('Virtual card creation failed', 500);
+  }
+}
+
+// ── FUND VIRTUAL CARD ─────────────────────────────────────────────────
+async fundVirtualCard(cardId: string, amountUSD: number): Promise<void> {
+  try {
+    await paystackAxios.post(`/virtual-cards/${cardId}/fund`, {
+      amount:           amountUSD * 100, // Paystack uses cents for USD
+      debit_currency:   'NGN',
+    });
+  } catch (err: any) {
+    logger.error('[Paystack] Fund virtual card failed:', err.response?.data);
+    throw new AppError('Card funding failed', 500);
+  }
+}
+
+// ── FREEZE VIRTUAL CARD ───────────────────────────────────────────────
+async freezeVirtualCard(cardId: string): Promise<void> {
+  try {
+    await paystackAxios.put(`/virtual-cards/${cardId}/deactivate`);
+  } catch (err: any) {
+    logger.error('[Paystack] Freeze virtual card failed:', err.response?.data);
+    throw new AppError('Card freeze failed', 500);
+  }
+}
+
+// ── UNFREEZE VIRTUAL CARD ─────────────────────────────────────────────
+async unfreezeVirtualCard(cardId: string): Promise<void> {
+  try {
+    await paystackAxios.put(`/virtual-cards/${cardId}/activate`);
+  } catch (err: any) {
+    logger.error('[Paystack] Unfreeze virtual card failed:', err.response?.data);
+    throw new AppError('Card unfreeze failed', 500);
+  }
+}
+
+// ── TERMINATE VIRTUAL CARD ────────────────────────────────────────────
+async terminateVirtualCard(cardId: string): Promise<void> {
+  try {
+    await paystackAxios.post(`/virtual-cards/${cardId}/terminate`);
+  } catch (err: any) {
+    logger.error('[Paystack] Terminate virtual card failed:', err.response?.data);
+    throw new AppError('Card termination failed', 500);
+  }
+}
+
+// ── GET CARD TRANSACTIONS ─────────────────────────────────────────────
+async getVirtualCardTransactions(
+  cardId: string,
+  from:   string,
+  to:     string,
+  page:   number = 1,
+  limit:  number = 20
+): Promise<any[]> {
+  try {
+    const res = await paystackAxios.get(`/virtual-cards/${cardId}/transactions`, {
+      params: { from, to, page, perPage: limit },
+    });
+    return res.data.data;
+  } catch (err: any) {
+    logger.error('[Paystack] Get card transactions failed:', err.response?.data);
+    throw new AppError('Failed to fetch card transactions', 500);
+  }
+}
+
+// ── GET VIRTUAL CARD DETAILS ──────────────────────────────────────────
+async getVirtualCard(cardId: string): Promise<any> {
+  try {
+    const res = await paystackAxios.get(`/virtual-cards/${cardId}`);
+    return res.data.data;
+  } catch (err: any) {
+    logger.error('[Paystack] Get virtual card failed:', err.response?.data);
+    throw new AppError('Failed to fetch card details', 500);
+  }
+}
+
   async createDedicatedVirtualAccount(data: {
   customer:       string;
   preferred_bank: string;
