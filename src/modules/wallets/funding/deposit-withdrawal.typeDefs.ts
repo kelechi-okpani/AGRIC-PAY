@@ -6,13 +6,6 @@ export const depositWithdrawalTypeDefs = `#graphql
     ABANDONED
   }
 
-  enum DepositChannel {
-    PAYSTACK
-    FLUTTERWAVE
-    BANK_TRANSFER
-    USSD
-  }
-
   enum WithdrawalStatus {
     PENDING
     PROCESSING
@@ -27,10 +20,8 @@ export const depositWithdrawalTypeDefs = `#graphql
     amount:           Float!
     currency:         String!
     status:           DepositStatus!
-    channel:          DepositChannel!
     reference:        String!
     gatewayReference: String
-    paymentUrl:       String
     paidAt:           String
     createdAt:        String!
     updatedAt:        String!
@@ -39,11 +30,6 @@ export const depositWithdrawalTypeDefs = `#graphql
   type DepositList {
     deposits: [Deposit!]!
     total:    Int!
-  }
-
-  type DepositInitResponse {
-    paymentUrl: String!
-    reference:  String!
   }
 
   type Withdrawal {
@@ -84,37 +70,40 @@ export const depositWithdrawalTypeDefs = `#graphql
   }
 
   type DepositStats {
-    daily:     JSON!
-    monthly:   JSON!
-    byChannel: JSON!
+    daily:   JSON!
+    monthly: JSON!
   }
 
   type WithdrawalFeeInfo {
-    amount:    Float!
-    fee:       Float!
-    total:     Float!
-    feeNote:   String!
+    amount:  Float!
+    fee:     Float!
+    total:   Float!
+    feeNote: String!
+  }
+
+  type VirtualAccount {
+    bankName:      String!
+    accountNumber: String!
+    accountName:   String!
   }
 
   type Query {
     myDeposits(status: DepositStatus, limit: Int, offset: Int):       DepositList!
     myWithdrawals(status: WithdrawalStatus, limit: Int, offset: Int): WithdrawalList!
-    deposit(reference: String!):      Deposit!
-    withdrawal(reference: String!):   Withdrawal!
-    verifyDeposit(reference: String!): Deposit!
-    banks:                            [Bank!]!
+    deposit(reference: String!):    Deposit!
+    withdrawal(reference: String!): Withdrawal!
+    banks:                          [Bank!]!
     resolveAccount(accountNumber: String!, bankCode: String!): BankAccount!
-    withdrawalFee(amount: Float!):    WithdrawalFeeInfo!
+    withdrawalFee(amount: Float!):  WithdrawalFeeInfo!
+    myVirtualAccount:               VirtualAccount!
 
     # Admin only
-    adminDeposits(status: DepositStatus, userId: ID, channel: DepositChannel, limit: Int, offset: Int): DepositList!
+    adminDeposits(status: DepositStatus, userId: ID, limit: Int, offset: Int):       DepositList!
     adminWithdrawals(status: WithdrawalStatus, userId: ID, limit: Int, offset: Int): WithdrawalList!
     depositStats: DepositStats!
   }
 
   type Mutation {
-    initiatePaystackDeposit(amount: Float!, email: String!):   DepositInitResponse!
-    initiateFlutterwaveDeposit(amount: Float!, email: String!, phone: String!, name: String!): DepositInitResponse!
     initiateWithdrawal(
       amount:        Float!
       bankCode:      String!

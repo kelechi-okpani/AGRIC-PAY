@@ -1,119 +1,129 @@
-import OpenAI from 'openai';
-import { env } from '../../config/env';
-import { AIIntent } from '../../core/types/enums';
-import redis from '../../config/redis';
-import { logger } from '../../shared/utils/logger';
+import { geminiService } from '../../infrastructure/gemini';
+import { AIIntent }      from '../../core/types/enums';
+import redis             from '../../config/redis';
+import { logger }        from '../../shared/utils/logger';
 
-const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+// ── Gemini uses 'user' | 'model' — NOT 'assistant' ───────────────────────────
+export type MessageRole = 'user' | 'model';
 
-interface ConversationMessage {
-  role: 'user' | 'assistant';
+export interface ConversationMessage {
+  role:    MessageRole;
   content: string;
+}
+
+export interface IntentResult {
+  intent:     string;
+  entities:   Record<string, any>;
+  confidence: number;
 }
 
 export class AIService {
 
-  async detectIntent(message: string): Promise<{ intent: AIIntent; entities: Record<string, any>; confidence: number }> {
-    const prompt = `You are an intent classifier for AgroFinPay, a Nigerian fintech and agricultural marketplace WhatsApp bot.
-
-Classify the user message into ONE of these intents:
-- TRANSFER_INTENT: user wants to send money (e.g. "send 5000 to 08012345678", "transfer money")
-- BALANCE_INTENT: user wants to check balance (e.g. "check balance", "my wallet", "how much I get")
-- BUY_PRODUCT_INTENT: user wants to buy agro products (e.g. "buy tomatoes", "I want yam", "show me products")
-- SELL_PRODUCT_INTENT: user wants to sell or list products (e.g. "list my product", "I want to sell")
-- CARD_INTENT: user wants virtual card info (e.g. "dollar card", "virtual card", "USD card")
-- SWAP_INTENT: user wants to swap or buy crypto (e.g. "buy USDT", "swap crypto", "bitcoin")
-- BUSINESS_INTENT: user wants business account (e.g. "business account", "payroll", "invoice")
-- SUPPORT_INTENT: user needs help (e.g. "help", "problem", "complaint", "I have issue")
-- ORDER_INTENT: user wants to check their order (e.g. "my order", "track delivery", "where is my product")
-- FALLBACK_INTENT: none of the above
-
-Also extract relevant entities (amount, phone, product name, etc).
-
-Respond ONLY as JSON: {"intent": "...", "entities": {}, "confidence": 0.0-1.0}
-
-User message: "${message}"`;
-
-    try {
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1,
-        max_tokens: 200,
-      });
-
-      const raw = response.choices[0].message.content || '{}';
-      const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim());
-      return { intent: parsed.intent || AIIntent.FALLBACK, entities: parsed.entities || {}, confidence: parsed.confidence || 0 };
-    } catch (err) {
-      logger.error('[AI] Intent detection failed:', err);
+  // ── DETECT INTENT ──────────────────────────────────────────────────
+  async detectIntent(message: string): Promise<IntentResult> {
+    if (!message?.trim()) {
       return { intent: AIIntent.FALLBACK, entities: {}, confidence: 0 };
     }
+    return geminiService.detectIntent(message);
   }
 
-  async generateResponse(userId: string, userMessage: string, context?: string): Promise<string> {
+  // ── GENERATE WHATSAPP RESPONSE ─────────────────────────────────────
+  async generateResponse(
+    userId:      string,
+    userMessage: string,
+    contextNote?: string
+  ): Promise<string> {
     const history = await this.getConversationHistory(userId);
-
-    const systemPrompt = `You are Agro, the friendly AI assistant for AgroFinPay — Nigeria's WhatsApp-first fintech and agricultural marketplace.
-
-You help users:
-- Send money and check balances
-- Buy and sell agricultural products
-- Manage virtual dollar cards
-- Swap crypto
-- Run business accounts
-- Track orders and deliveries
-
-Always respond in simple English or Nigerian Pidgin. Be concise (max 3 sentences). Be friendly and helpful.
-${context ? `Current context: ${context}` : ''}`;
-
-    const messages: any[] = [
-      { role: 'system', content: systemPrompt },
-      ...history.slice(-10),
-      { role: 'user', content: userMessage },
-    ];
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages,
-      temperature: 0.7,
-      max_tokens: 300,
-    });
-
-    const reply = response.choices[0].message.content || "I didn't understand that. Please try again.";
+    const reply   = await geminiService.generateWhatsAppReply(
+      userMessage,
+      history,
+      contextNote
+    );
     await this.saveToHistory(userId, userMessage, reply);
     return reply;
   }
 
+  // ── GET CONVERSATION HISTORY ───────────────────────────────────────
   async getConversationHistory(userId: string): Promise<ConversationMessage[]> {
-    const raw = await redis.get(`chat:history:${userId}`);
-    return raw ? JSON.parse(raw) : [];
+    try {
+      const raw = await redis.get(`chat:history:${userId}`);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
   }
 
-  async saveToHistory(userId: string, userMessage: string, assistantReply: string): Promise<void> {
-    const history = await this.getConversationHistory(userId);
-    history.push({ role: 'user', content: userMessage });
-    history.push({ role: 'assistant', content: assistantReply });
+  // ── SAVE TO HISTORY ────────────────────────────────────────────────
+  async saveToHistory(
+    userId:      string,
+    userMessage: string,
+    botReply:    string
+  ): Promise<void> {
+    try {
+      const history = await this.getConversationHistory(userId);
 
-    const trimmed = history.slice(-20); // Keep last 20 messages
-    await redis.set(`chat:history:${userId}`, JSON.stringify(trimmed), 'EX', 86400);
+      history.push({ role: 'user',  content: userMessage });
+      history.push({ role: 'model', content: botReply    });
+
+      // Keep last 20 messages (10 exchanges)
+      const trimmed = history.slice(-20);
+
+      await redis.set(
+        `chat:history:${userId}`,
+        JSON.stringify(trimmed),
+        'EX',
+        86400
+      );
+    } catch (err) {
+      logger.error('[AI] Save history failed:', err);
+    }
   }
 
+  // ── CLEAR HISTORY ──────────────────────────────────────────────────
   async clearHistory(userId: string): Promise<void> {
     await redis.del(`chat:history:${userId}`);
   }
 
-  async setConversationState(userId: string, state: Record<string, any>): Promise<void> {
-    await redis.set(`chat:state:${userId}`, JSON.stringify(state), 'EX', 3600);
+  // ── SET CONVERSATION STATE ─────────────────────────────────────────
+  async setConversationState(
+    userId: string,
+    state:  Record<string, any>
+  ): Promise<void> {
+    await redis.set(
+      `chat:state:${userId}`,
+      JSON.stringify(state),
+      'EX',
+      3600
+    );
   }
 
-  async getConversationState(userId: string): Promise<Record<string, any> | null> {
-    const raw = await redis.get(`chat:state:${userId}`);
-    return raw ? JSON.parse(raw) : null;
+  // ── GET CONVERSATION STATE ─────────────────────────────────────────
+  async getConversationState(
+    userId: string
+  ): Promise<Record<string, any> | null> {
+    try {
+      const raw = await redis.get(`chat:state:${userId}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
   }
 
+  // ── CLEAR CONVERSATION STATE ───────────────────────────────────────
   async clearConversationState(userId: string): Promise<void> {
     await redis.del(`chat:state:${userId}`);
+  }
+
+  // ── MERGE HISTORY FROM EXTERNAL SOURCE ────────────────────────────
+  // Utility for importing history that may use 'assistant' role (OpenAI format)
+  // and normalising it to Gemini format
+  normaliseHistory(
+    messages: { role: string; content: string }[]
+  ): ConversationMessage[] {
+    return messages.map(m => ({
+      role:    m.role === 'assistant' ? 'model' : m.role === 'user' ? 'user' : 'model',
+      content: m.content,
+    })) as ConversationMessage[];
   }
 }
 

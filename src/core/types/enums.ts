@@ -60,6 +60,8 @@ export enum TransactionType {
 }
 
 export enum AIIntent {
+  DEPOSIT = 'DEPOSIT_INTENT',
+  WITHDRAW = 'WITHDRAW_INTENT',
   TRANSFER = 'TRANSFER_INTENT',
   BALANCE = 'BALANCE_INTENT',
   BUY_PRODUCT = 'BUY_PRODUCT_INTENT',
