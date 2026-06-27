@@ -1,7 +1,7 @@
-import { Worker } from 'bullmq';
-import { User } from '../modules/auth/auth.model';
+import { Worker }          from 'bullmq';
+import { User }            from '../modules/auth/auth.model';
 import { whatsAppService } from '../infrastructure/whatsapp';
-import { logger } from '../shared/utils/logger';
+import { logger }          from '../shared/utils/logger';
 
 export const startNotificationWorker = () => {
   const worker = new Worker(
@@ -9,11 +9,12 @@ export const startNotificationWorker = () => {
     async (job) => {
       const { userId, phone, channel, message, template, variables } = job.data;
 
-      // Resolve phone number
+      // ── Resolve phone number ────────────────────────────────────
       let targetPhone = phone;
+
       if (!targetPhone && userId) {
-        const user = await User.findById(userId);
-        targetPhone = user?.phone;
+        const user   = await User.findById(userId);
+        targetPhone  = user?.phone;
       }
 
       if (!targetPhone) {
@@ -21,13 +22,16 @@ export const startNotificationWorker = () => {
         return;
       }
 
+      // ── Dispatch by channel ────────────────────────────────────
       switch (channel) {
+
         case 'WHATSAPP':
           if (template) {
+            // Send as Twilio template / content message
             await whatsAppService.sendTemplate({
               to:           targetPhone,
               templateName: template,
-              components:   variables,
+              variables:    variables,
             });
           } else {
             await whatsAppService.sendText(targetPhone, message);
@@ -35,18 +39,29 @@ export const startNotificationWorker = () => {
           break;
 
         case 'SMS':
-          // SMS is no longer via Twilio — log a warning
-          // If you need SMS fallback, plug in Termii, AfricasTalking, etc. here
-          logger.warn(`[Notification Job] SMS channel not configured — skipping job ${job.id}`);
+          // WhatsApp-first app — SMS not configured
+          // Plug in Termii or Africa's Talking here if SMS needed
+          logger.warn(
+            `[Notification Job] SMS not configured — skipping job ${job.id} for ${targetPhone}`
+          );
+          break;
+
+        case 'EMAIL':
+          // Plug in Resend, Nodemailer, or Sendgrid here
+          logger.warn(
+            `[Notification Job] EMAIL not configured — skipping job ${job.id}`
+          );
           break;
 
         default:
-          logger.warn(`[Notification Job] Unknown channel "${channel}" for job ${job.id}`);
+          logger.warn(
+            `[Notification Job] Unknown channel "${channel}" for job ${job.id}`
+          );
       }
     },
     {
       connection: {
-        host:     process.env.REDIS_HOST || 'localhost',
+        host:     process.env.REDIS_HOST     || 'localhost',
         port:     parseInt(process.env.REDIS_PORT || '6379'),
         password: process.env.REDIS_PASSWORD || undefined,
       },
@@ -55,10 +70,15 @@ export const startNotificationWorker = () => {
   );
 
   worker.on('completed', (job) =>
-    logger.info(`[Notification Job] Completed job ${job.id} — channel: ${job.data.channel}`)
+    logger.info(
+      `[Notification Job] ✅ Completed: ${job.id} — channel: ${job.data.channel}`
+    )
   );
+
   worker.on('failed', (job, err) =>
-    logger.error(`[Notification Job] Failed job ${job?.id}:`, err)
+    logger.error(
+      `[Notification Job] ❌ Failed: ${job?.id} — ${err.message}`
+    )
   );
 
   return worker;
