@@ -14,6 +14,7 @@ export const depositWithdrawalTypeDefs = `#graphql
     REVERSED
   }
 
+
   type Deposit {
     id:               ID!
     userId:           ID!
