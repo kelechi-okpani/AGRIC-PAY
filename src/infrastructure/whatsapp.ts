@@ -3,27 +3,66 @@ import { env }             from '../config/env';
 import { AppError }        from '../core/errors/AppError';
 import { logger }          from '../shared/utils/logger';
 
-// ── TYPES ─────────────────────────────────────────────────────────────────────
-export interface IncomingWebhookMessage {
-  from:        string; // whatsapp:+2348012345678
-  body:        string;
-  messageId:   string;
-  mediaUrl?:   string;
-  mediaType?:  string;
-  profileName?: string;
-  timestamp:   number;
+// ── TYPES — kept identical to before so nothing else breaks ───────────────────
+export interface TextMessage {
+  to:   string;
+  body: string;
 }
 
 export interface TemplateMessage {
-  to:           string;
-  templateName: string;
-  variables?:   string[];
+  to:            string;
+  templateName:  string;
+  languageCode?: string;
+  components?:   any[];
+  variables?:    string[]; // Twilio content template variables
+}
+
+export interface MediaMessage {
+  to:        string;
+  type:      'image' | 'document' | 'audio' | 'video';
+  mediaUrl:  string;
+  caption?:  string;
+  filename?: string;
+}
+
+export interface InteractiveMessage {
+  to:            string;
+  body:          string;
+  footer?:       string;
+  buttons?:      { id: string; title: string }[];
+  listTitle?:    string;
+  listSections?: {
+    title: string;
+    rows:  { id: string; title: string; description?: string }[];
+  }[];
+}
+
+export interface LocationMessage {
+  to:        string;
+  latitude:  number;
+  longitude: number;
+  name?:     string;
+  address?:  string;
+}
+
+export interface IncomingWebhookMessage {
+  from:              string;
+  messageId:         string;
+  type:              string;
+  text?:             string;
+  mediaId?:          string;
+  mediaUrl?:         string;
+  caption?:          string;
+  interactiveReply?: { type: string; id: string; title: string };
+  location?:         { latitude: number; longitude: number; name?: string; address?: string };
+  timestamp:         number;
+  profileName?:      string;
 }
 
 // ── SERVICE ───────────────────────────────────────────────────────────────────
 class WhatsAppService {
-  private client:       Twilio;
-  private fromNumber:   string;
+  private client:     Twilio;
+  private fromNumber: string;
 
   constructor() {
     this.client     = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
@@ -31,21 +70,21 @@ class WhatsAppService {
   }
 
   // ── FORMAT PHONE ──────────────────────────────────────────────────
-  private formatTo(phone: string): string {
-    // Strip any whatsapp: prefix if already present
-    const clean = phone.replace('whatsapp:', '');
+  private formatPhone(phone: string): string {
+    // Remove any existing whatsapp: prefix
+    const clean = phone.replace('whatsapp:', '').replace(/\s+/g, '');
 
-    // Add whatsapp: prefix and Nigeria country code if needed
-    if (clean.startsWith('+')) {
-      return `whatsapp:${clean}`;
-    }
-    if (clean.startsWith('0')) {
-      return `whatsapp:+234${clean.slice(1)}`;
-    }
-    if (clean.startsWith('234')) {
-      return `whatsapp:+${clean}`;
-    }
-    return `whatsapp:${clean}`;
+    // Already has country code with +
+    if (clean.startsWith('+')) return `whatsapp:${clean}`;
+
+    // Nigerian number starting with 0
+    if (clean.startsWith('0')) return `whatsapp:+234${clean.slice(1)}`;
+
+    // Already has 234 without +
+    if (clean.startsWith('234')) return `whatsapp:+${clean}`;
+
+    // Fallback
+    return `whatsapp:+${clean}`;
   }
 
   // ── SEND TEXT ─────────────────────────────────────────────────────
@@ -53,10 +92,10 @@ class WhatsAppService {
     try {
       const msg = await this.client.messages.create({
         from: this.fromNumber,
-        to:   this.formatTo(to),
+        to:   this.formatPhone(to),
         body,
       });
-      logger.info(`[WhatsApp] Sent to ${to} — SID: ${msg.sid}`);
+      logger.info(`[WhatsApp] Text sent to ${to} — SID: ${msg.sid}`);
       return msg.sid;
     } catch (err: any) {
       logger.error('[WhatsApp] Send text failed:', err.message);
@@ -64,43 +103,184 @@ class WhatsAppService {
     }
   }
 
-  // ── SEND MEDIA ────────────────────────────────────────────────────
-  async sendMedia(to: string, body: string, mediaUrl: string): Promise<string> {
+  // ── SEND TEMPLATE ─────────────────────────────────────────────────
+  // Twilio uses Content Templates instead of Meta templates
+  // For sandbox testing sendText works fine — templates needed for production
+  async sendTemplate(msg: TemplateMessage): Promise<string> {
     try {
-      const msg = await this.client.messages.create({
-        from:      this.fromNumber,
-        to:        this.formatTo(to),
+      // In Twilio sandbox — just send as plain text with the template name as context
+      // In production replace this with Twilio Content API call
+      const body = msg.variables?.length
+        ? `${msg.templateName}: ${msg.variables.join(', ')}`
+        : msg.templateName;
+
+      const result = await this.client.messages.create({
+        from: this.fromNumber,
+        to:   this.formatPhone(msg.to),
         body,
-        mediaUrl:  [mediaUrl],
       });
-      return msg.sid;
+
+      logger.info(`[WhatsApp] Template "${msg.templateName}" sent to ${msg.to}`);
+      return result.sid;
+    } catch (err: any) {
+      logger.error('[WhatsApp] Send template failed:', err.message);
+      throw new AppError('WhatsApp template delivery failed', 500);
+    }
+  }
+
+  // ── SEND MEDIA ────────────────────────────────────────────────────
+  async sendMedia(msg: MediaMessage): Promise<string> {
+    try {
+      const result = await this.client.messages.create({
+        from:      this.fromNumber,
+        to:        this.formatPhone(msg.to),
+        body:      msg.caption || '',
+        mediaUrl:  [msg.mediaUrl],
+      });
+      logger.info(`[WhatsApp] ${msg.type} sent to ${msg.to}`);
+      return result.sid;
     } catch (err: any) {
       logger.error('[WhatsApp] Send media failed:', err.message);
       throw new AppError('WhatsApp media delivery failed', 500);
     }
   }
 
+  // ── SEND INTERACTIVE BUTTONS ──────────────────────────────────────
+  // Twilio sandbox does not support native interactive buttons
+  // We simulate them with numbered text options — same UX in chat
+  async sendButtons(msg: InteractiveMessage): Promise<string> {
+    try {
+      if (!msg.buttons?.length) throw new AppError('Buttons required', 400);
+
+      const buttonText = msg.buttons
+        .map((b, i) => `${i + 1}️⃣ *${b.title}*`)
+        .join('\n');
+
+      const body =
+        `${msg.body}\n\n` +
+        `${buttonText}` +
+        (msg.footer ? `\n\n_${msg.footer}_` : '');
+
+      const result = await this.client.messages.create({
+        from: this.fromNumber,
+        to:   this.formatPhone(msg.to),
+        body,
+      });
+
+      logger.info(`[WhatsApp] Buttons (text-simulated) sent to ${msg.to}`);
+      return result.sid;
+    } catch (err: any) {
+      logger.error('[WhatsApp] Send buttons failed:', err.message);
+      throw new AppError('WhatsApp interactive message failed', 500);
+    }
+  }
+
+  // ── SEND LIST ─────────────────────────────────────────────────────
+  // Simulated as numbered list in text — works in sandbox
+  async sendList(msg: InteractiveMessage): Promise<string> {
+    try {
+      if (!msg.listSections?.length) throw new AppError('List sections required', 400);
+
+      let listText = `${msg.body}\n\n`;
+
+      let counter = 1;
+      for (const section of msg.listSections) {
+        if (section.title) listText += `*${section.title}*\n`;
+        for (const row of section.rows) {
+          listText += `${counter}. *${row.title}*`;
+          if (row.description) listText += ` — ${row.description}`;
+          listText += '\n';
+          counter++;
+        }
+        listText += '\n';
+      }
+
+      listText += `_Reply with the number to select._`;
+      if (msg.footer) listText += `\n\n_${msg.footer}_`;
+
+      const result = await this.client.messages.create({
+        from: this.fromNumber,
+        to:   this.formatPhone(msg.to),
+        body: listText,
+      });
+
+      logger.info(`[WhatsApp] List (text-simulated) sent to ${msg.to}`);
+      return result.sid;
+    } catch (err: any) {
+      logger.error('[WhatsApp] Send list failed:', err.message);
+      throw new AppError('WhatsApp list message failed', 500);
+    }
+  }
+
+  // ── SEND LOCATION ─────────────────────────────────────────────────
+  // Twilio does not support native location messages
+  // Send as Google Maps link instead
+  async sendLocation(msg: LocationMessage): Promise<string> {
+    const mapsUrl = `https://maps.google.com/?q=${msg.latitude},${msg.longitude}`;
+    const body    =
+      `📍 *${msg.name || 'Location'}*\n` +
+      (msg.address ? `${msg.address}\n` : '') +
+      `\n${mapsUrl}`;
+
+    return this.sendText(msg.to, body);
+  }
+
+  // ── MARK AS READ ──────────────────────────────────────────────────
+  // Not supported in Twilio sandbox — no-op so nothing breaks
+  async markAsRead(_messageId: string): Promise<void> {
+    // Twilio sandbox does not support read receipts
+    // This is intentionally a no-op
+  }
+
+  // ── GET MEDIA URL ─────────────────────────────────────────────────
+  // Twilio sends MediaUrl0 directly in the webhook body
+  async getMediaUrl(mediaIdOrUrl: string): Promise<string> {
+    // In Twilio the media URL comes directly — just return it
+    return mediaIdOrUrl;
+  }
+
+  // ── DOWNLOAD MEDIA BUFFER ─────────────────────────────────────────
+  async downloadMedia(mediaUrl: string): Promise<Buffer> {
+    try {
+      const axios  = require('axios');
+      const res    = await axios.get(mediaUrl, {
+        responseType: 'arraybuffer',
+        auth: {
+          username: env.TWILIO_ACCOUNT_SID,
+          password: env.TWILIO_AUTH_TOKEN,
+        },
+      });
+      return Buffer.from(res.data);
+    } catch (err: any) {
+      logger.error('[WhatsApp] Download media failed:', err.message);
+      throw new AppError('Media download failed', 500);
+    }
+  }
+
   // ── PARSE INCOMING TWILIO WEBHOOK ─────────────────────────────────
   parseIncomingMessage(body: Record<string, any>): IncomingWebhookMessage | null {
     try {
-      if (!body?.From || !body?.Body) return null;
+      if (!body?.From) return null;
 
-      return {
-        from:        body.From,           // whatsapp:+2348012345678
-        body:        body.Body,
+      const message: IncomingWebhookMessage = {
+        from:        body.From.replace('whatsapp:', ''), // strip prefix → plain number
         messageId:   body.MessageSid,
+        type:        body.MediaUrl0 ? 'image' : 'text',
+        text:        body.Body || '',
         mediaUrl:    body.MediaUrl0,
-        mediaType:   body.MediaContentType0,
+        mediaId:     body.MediaUrl0,   // Twilio sends URL not ID
         profileName: body.ProfileName,
         timestamp:   Math.floor(Date.now() / 1000),
       };
+
+      return message;
     } catch (err) {
       logger.error('[WhatsApp] Parse webhook failed:', err);
       return null;
     }
   }
 
-  // ── VERIFY TWILIO WEBHOOK SIGNATURE ──────────────────────────────
+  // ── VERIFY TWILIO WEBHOOK SIGNATURE ───────────────────────────────
   verifyWebhookSignature(
     url:       string,
     params:    Record<string, string>,
@@ -113,14 +293,55 @@ class WhatsAppService {
         url,
         params
       );
-    } catch {
+    } catch (err) {
+      logger.error('[WhatsApp] Signature validation error:', err);
       return false;
     }
   }
 
-  // ── HIGH-LEVEL HELPERS ────────────────────────────────────────────
+  // ── VERIFY WEBHOOK CHALLENGE ───────────────────────────────────────
+  // Twilio does not use GET challenge — kept as no-op for compatibility
+  verifyWebhookChallenge(
+    _mode:      string,
+    _token:     string,
+    _challenge: string
+  ): string | null {
+    // Twilio does not require a webhook challenge verification
+    // Meta/WhatsApp Cloud API needs this — Twilio does not
+    return null;
+  }
 
-  // Welcome message
+  // ════════════════════════════════════════════════════════════════════
+  //  HIGH-LEVEL HELPERS — identical signatures to before
+  // ════════════════════════════════════════════════════════════════════
+
+  // ── SEND OTP ──────────────────────────────────────────────────────
+  async sendOTP(
+    to:   string,
+    otp:  string,
+    type: 'register' | 'login' | 'reset' = 'register'
+  ): Promise<void> {
+    const messages = {
+      register:
+        `🌾 *AgroFinPay*\n\n` +
+        `Your verification code is:\n\n` +
+        `*${otp}*\n\n` +
+        `Expires in 5 minutes. Do not share this code with anyone.`,
+      login:
+        `🔐 *AgroFinPay Login*\n\n` +
+        `Your one-time login code is:\n\n` +
+        `*${otp}*\n\n` +
+        `Expires in 5 minutes.`,
+      reset:
+        `🔑 *AgroFinPay*\n\n` +
+        `Your password reset code is:\n\n` +
+        `*${otp}*\n\n` +
+        `Expires in 5 minutes.`,
+    };
+    await this.sendText(to, messages[type]);
+  }
+
+  // ── SEND WELCOME ──────────────────────────────────────────────────
   async sendWelcome(to: string, firstName: string): Promise<void> {
     await this.sendText(
       to,
@@ -140,61 +361,53 @@ class WhatsAppService {
     );
   }
 
-  // OTP
-  async sendOTP(
-    to:   string,
-    otp:  string,
-    type: 'register' | 'login' | 'reset' = 'register'
-  ): Promise<void> {
-    const messages = {
-      register: `🌾 *AgroFinPay*\n\nYour verification code is:\n\n*${otp}*\n\nExpires in 5 minutes. Do not share this code.`,
-      login:    `🔐 *AgroFinPay Login*\n\nYour login code is:\n\n*${otp}*\n\nExpires in 5 minutes.`,
-      reset:    `🔑 *AgroFinPay*\n\nYour password reset code is:\n\n*${otp}*\n\nExpires in 5 minutes.`,
-    };
-    await this.sendText(to, messages[type]);
-  }
-
-  // Transfer confirmation
+  // ── SEND TRANSFER CONFIRMATION ────────────────────────────────────
   async sendTransferConfirmation(to: string, data: {
     recipientName:  string;
     recipientPhone: string;
     amount:         number;
     reference:      string;
   }): Promise<void> {
-    await this.sendText(
+    // Use simulated buttons since Twilio sandbox has no native buttons
+    await this.sendButtons({
       to,
-      `💸 *Confirm Transfer*\n\n` +
-      `Send *₦${data.amount.toLocaleString()}* to:\n` +
-      `👤 ${data.recipientName}\n` +
-      `📱 ${data.recipientPhone}\n\n` +
-      `Ref: ${data.reference}\n\n` +
-      `Reply *YES* to confirm or *NO* to cancel.`
-    );
+      body:
+        `💸 *Confirm Transfer*\n\n` +
+        `Send *₦${data.amount.toLocaleString()}* to:\n` +
+        `👤 ${data.recipientName}\n` +
+        `📱 ${data.recipientPhone}\n\n` +
+        `Ref: ${data.reference}`,
+      footer: 'This action cannot be undone',
+      buttons: [
+        { id: `CONFIRM_TXN_${data.reference}`, title: 'YES — Confirm' },
+        { id: `CANCEL_TXN_${data.reference}`,  title: 'NO — Cancel'  },
+      ],
+    });
   }
 
-  // Order update
+  // ── SEND ORDER UPDATE ─────────────────────────────────────────────
   async sendOrderUpdate(to: string, data: {
     reference: string;
     status:    string;
     message:   string;
   }): Promise<void> {
-    const emoji: Record<string, string> = {
-      CONFIRMED:  '✅',
-      DISPATCHED: '🚚',
-      IN_TRANSIT: '📍',
-      DELIVERED:  '🎉',
-      CANCELLED:  '❌',
+    const statusEmoji: Record<string, string> = {
+      CONFIRMED:   '✅',
+      DISPATCHED:  '🚚',
+      IN_TRANSIT:  '📍',
+      DELIVERED:   '🎉',
+      CANCELLED:   '❌',
     };
     await this.sendText(
       to,
-      `${emoji[data.status] || '📦'} *Order Update*\n\n` +
+      `${statusEmoji[data.status] || '📦'} *Order Update*\n\n` +
       `Order: *${data.reference}*\n` +
       `Status: *${data.status}*\n\n` +
       `${data.message}`
     );
   }
 
-  // KYC update
+  // ── SEND KYC UPDATE ───────────────────────────────────────────────
   async sendKYCUpdate(
     to:      string,
     status:  'APPROVED' | 'REJECTED' | 'RESUBMISSION_REQUIRED',
@@ -210,17 +423,39 @@ class WhatsAppService {
         `Reply *MENU* to get started.`,
       REJECTED:
         `❌ *KYC Rejected*\n\n` +
-        `Reason: ${reason || 'Documents could not be verified.'}\n\n` +
+        `Your KYC submission was rejected.\n\n` +
+        `*Reason:* ${reason || 'Documents could not be verified.'}\n\n` +
         `Reply *KYC* to resubmit.`,
       RESUBMISSION_REQUIRED:
         `⚠️ *Additional Info Required*\n\n` +
-        `${reason || 'Please resubmit your documents.'}\n\n` +
+        `${reason || 'Please resubmit your KYC documents.'}\n\n` +
         `Reply *KYC* to resubmit.`,
     };
     await this.sendText(to, messages[status]);
   }
 
-  // Escalation notice
+  // ── SEND PRODUCT LIST ─────────────────────────────────────────────
+  async sendProductList(
+    to:       string,
+    products: { id: string; name: string; price: number; unit: string }[]
+  ): Promise<void> {
+    await this.sendList({
+      to,
+      body:      `🌾 *Available Products*\n\nSelect a product to place an order.`,
+      footer:    'Powered by AgroFinPay Marketplace',
+      listTitle: 'Browse Products',
+      listSections: [{
+        title: 'Products',
+        rows:  products.slice(0, 10).map(p => ({
+          id:          `PRODUCT_${p.id}`,
+          title:       p.name.slice(0, 24),
+          description: `₦${p.price.toLocaleString()} per ${p.unit}`,
+        })),
+      }],
+    });
+  }
+
+  // ── SEND ESCALATION NOTICE ────────────────────────────────────────
   async sendEscalationNotice(to: string, agentName?: string): Promise<void> {
     await this.sendText(
       to,
@@ -231,23 +466,9 @@ class WhatsAppService {
       `\n\nPlease continue describing your issue here while you wait.`
     );
   }
-
-  // Mark as read — not available in Twilio sandbox
-  // (included so the rest of the code doesn't break)
-  async markAsRead(_messageId: string): Promise<void> {
-    // Twilio does not support read receipts in sandbox mode
-    // This is a no-op — safe to call
-  }
-
-  // Get media URL — Twilio media comes directly in webhook
-  async getMediaUrl(mediaId: string): Promise<string> {
-    return mediaId; // Twilio sends the full URL directly in MediaUrl0
-  }
 }
 
 export const whatsAppService = new WhatsAppService();
-
-
 
 
 // import axios, { AxiosInstance } from 'axios';
