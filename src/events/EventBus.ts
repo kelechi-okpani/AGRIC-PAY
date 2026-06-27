@@ -1,4 +1,5 @@
-import EventEmitter from 'events';
+// import EventEmitter from 'events';
+import { EventEmitter } from "node:events";
 import { logger } from '../shared/utils/logger';
 
 class EventBus extends EventEmitter {
