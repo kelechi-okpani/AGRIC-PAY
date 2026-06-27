@@ -58,6 +58,7 @@ export const schema = makeExecutableSchema({
     userTypeDefs,
     supportTypeDefs,
     depositWithdrawalTypeDefs,
+    
   ]),
   resolvers: mergeResolvers([
     { JSON: GraphQLJSON },
