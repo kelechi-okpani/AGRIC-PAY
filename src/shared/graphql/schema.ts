@@ -28,8 +28,10 @@ import { userTypeDefs } from '../../modules/users/user.typeDefs';
 import { userResolvers } from '../../modules/users/user.resolvers';
 import { supportTypeDefs } from '../../modules/support/support.typeDefs';
 import { supportResolvers } from '../../modules/support/support.resolvers';
-import { depositWithdrawalTypeDefs } from '@modules/wallets/funding/deposit-withdrawal.typeDefs';
-import { depositWithdrawalResolvers } from '@modules/wallets/funding/deposit-withdrawal.resolvers';
+import { depositWithdrawalResolvers } from '../../modules/wallets/funding/deposit-withdrawal.resolvers';
+import { depositWithdrawalTypeDefs } from '../../modules/wallets/funding/deposit-withdrawal.typeDefs'
+
+
 
 const rootTypeDefs = `#graphql
   scalar JSON
@@ -58,7 +60,7 @@ export const schema = makeExecutableSchema({
     userTypeDefs,
     supportTypeDefs,
     depositWithdrawalTypeDefs,
-    
+
   ]),
   resolvers: mergeResolvers([
     { JSON: GraphQLJSON },
